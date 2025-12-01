@@ -2,6 +2,22 @@
 Security module for JWT authentication and authorization
 This module needs review
 Will be rebuilt in future
+
+Outline for now
+
+security = HTTPBearer()
+jwks_client = PyJWKClient(...)
+class TokenData(BaseModel):
+
+decode_token(token: str) -> TokenData
+async def get_current_user(...) -> TokenData
+async def get_current_active_user(...) -> TokenData
+def require_role(*required_roles: str)
+def require_permission(*required_permissions: str)
+def require_all_roles(*required_roles: str)
+
+CurrentUser
+CurrentActiveUser
 """
 
 from typing import Annotated, Any

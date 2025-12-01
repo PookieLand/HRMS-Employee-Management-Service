@@ -59,10 +59,6 @@ app.include_router(employees_router, prefix="/api/v1")
 # Health check endpoint
 @app.get("/health", tags=["health"])
 async def health_check():
-    """
-    Health check endpoint.
-    Returns service status and basic information.
-    """
     return {
         "status": "healthy",
         "service": settings.APP_NAME,
