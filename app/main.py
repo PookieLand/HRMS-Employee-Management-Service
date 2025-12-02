@@ -61,6 +61,6 @@ app.include_router(employees_router, prefix="/api/v1")
 async def health_check():
     return {
         "status": "healthy",
-        "service": settings.APP_NAME,
-        "version": settings.APP_VERSION,
+        # "service": settings.APP_NAME,
+        # "version": settings.APP_VERSION,
     }
