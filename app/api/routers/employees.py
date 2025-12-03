@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -6,7 +7,17 @@ from sqlmodel import select
 from app.api.dependencies import CurrentUserDep, SessionDep
 from app.core.logging import get_logger
 from app.core.security import TokenData, get_current_user
-from app.models.employee import Employee, EmployeeCreate, EmployeePublic, EmployeeUpdate
+from app.models.employee import (
+    DEFAULT_CONTRACT_TYPE,
+    DEFAULT_DEPARTMENT,
+    DEFAULT_POSITION,
+    DEFAULT_SALARY,
+    Employee,
+    EmployeeCreate,
+    EmployeePublic,
+    EmployeeUpdate,
+    InternalEmployeeCreate,
+)
 
 logger = get_logger(__name__)
 
@@ -18,6 +29,44 @@ router = APIRouter(
 )
 
 
+@router.post("/internal", response_model=EmployeePublic, status_code=201)
+async def create_employee_internal(
+    employee: InternalEmployeeCreate,
+    session: SessionDep,
+):
+    """
+    Create a new employee record (Internal service-to-service endpoint).
+
+    This endpoint is for internal service calls (e.g., from User Management Service)
+    and does not require authentication. It only requires basic user info and sets
+    default values for position, department, hire date, etc.
+    """
+    logger.info(
+        f"Creating new employee (internal): {employee.first_name} {employee.last_name} "
+        f"(user_id: {employee.user_id})"
+    )
+
+    # Create Employee with defaults for missing fields
+    db_employee = Employee(
+        first_name=employee.first_name,
+        last_name=employee.last_name,
+        email=employee.email,
+        contact_number=employee.contact_number,
+        position=DEFAULT_POSITION,
+        department=DEFAULT_DEPARTMENT,
+        date_of_hire=date.today(),
+        contract_type=DEFAULT_CONTRACT_TYPE,
+        salary=DEFAULT_SALARY,
+    )
+
+    session.add(db_employee)
+    session.commit()
+    session.refresh(db_employee)
+
+    logger.info(f"Employee created successfully with ID: {db_employee.id}")
+    return db_employee
+
+
 @router.post("/", response_model=EmployeePublic, status_code=201)
 async def create_employee(
     employee: EmployeeCreate,
@@ -25,7 +74,7 @@ async def create_employee(
     current_user: CurrentUserDep,
 ):
     """
-    Create a new employee record.
+    Create a new employee record (Requires authentication).
     """
     logger.info(
         f"Creating new employee: {employee.first_name} {employee.last_name} "

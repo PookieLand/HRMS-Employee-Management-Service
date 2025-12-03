@@ -1,3 +1,44 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Documentation
+*.md
+docs/
+README*
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Environment
 .env
-.venv/
-__pycache__/
+.env.*
+!.env.example
+
+# Logs
+*.log

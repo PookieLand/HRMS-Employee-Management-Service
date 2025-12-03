@@ -3,6 +3,11 @@ from decimal import Decimal
 
 from sqlmodel import Field, SQLModel
 
+DEFAULT_POSITION = "Employee"
+DEFAULT_DEPARTMENT = "General"
+DEFAULT_CONTRACT_TYPE = "Full-Time"
+DEFAULT_SALARY = Decimal("0.00")
+
 
 class EmployeeBase(SQLModel):
     """Base fields shared across Employee models"""
@@ -26,6 +31,20 @@ class Employee(EmployeeBase, table=True):
     date_of_hire: date
     contract_type: str = Field(max_length=100)
     salary: Decimal = Field(max_digits=12, decimal_places=2)
+
+
+class InternalEmployeeCreate(SQLModel):
+    """
+    Simplified input schema for internal service-to-service employee creation.
+    Used by User Management Service during signup.
+    Only requires basic user info; other fields get default values.
+    """
+
+    user_id: int
+    email: str = Field(max_length=255)
+    first_name: str = Field(max_length=255, min_length=1)
+    last_name: str = Field(max_length=255, min_length=1)
+    contact_number: str | None = None
 
 
 class EmployeeCreate(SQLModel):
