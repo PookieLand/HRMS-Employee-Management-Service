@@ -17,6 +17,17 @@ class Settings(BaseSettings):
     DB_PORT: int = 3306
     DB_CHARSET: str = "utf8"
 
+    # Redis Settings
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str = ""
+    REDIS_DB: int = 0
+    CACHE_TTL: int = 300
+
+    # Kafka Settings
+    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
+    KAFKA_ENABLED: bool = True
+
     # CORS Settings
     CORS_ORIGINS: str = "https://localhost,http://localhost:3000"
     CORS_ALLOW_CREDENTIALS: bool = True

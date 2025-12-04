@@ -4,8 +4,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routers.employees import router as employees_router
+from app.core.cache import RedisClient
 from app.core.config import settings
 from app.core.database import create_db_and_tables
+from app.core.kafka import KafkaProducer
 from app.core.logging import get_logger
 from app.models.employee import Employee
 
@@ -21,15 +23,27 @@ async def lifespan(_: FastAPI):
     # Startup
     logger.info("Starting application...")
     logger.info("Creating database and tables...")
-    # Explicitly passing models to create only necessary tables
     create_db_and_tables(Employee)
     logger.info("Database and tables created successfully")
+
+    logger.info("Initializing Redis client...")
+    RedisClient.get_client()
+    logger.info("Redis client initialized successfully")
+
+    logger.info("Initializing Kafka producer...")
+    await KafkaProducer.start()
+    logger.info("Kafka producer initialized successfully")
+
     logger.info("Application startup complete")
 
     yield
 
     # Shutdown
     logger.info("Application shutting down...")
+    await KafkaProducer.stop()
+    logger.info("Kafka producer stopped")
+    RedisClient.close()
+    logger.info("Redis client closed")
 
 
 # Initialize FastAPI application

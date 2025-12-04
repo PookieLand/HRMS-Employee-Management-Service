@@ -5,6 +5,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import select
 
 from app.api.dependencies import CurrentUserDep, SessionDep
+from app.core.cache import (
+    clear_cache_pattern,
+    delete_from_cache,
+    get_cache_key,
+    get_from_cache,
+    set_to_cache,
+)
+from app.core.events import (
+    EmployeeCreatedEvent,
+    EmployeeDeletedEvent,
+    EmployeeUpdatedEvent,
+    EventEnvelope,
+    EventMetadata,
+    EventType,
+)
+from app.core.kafka import publish_event
 from app.core.logging import get_logger
 from app.core.security import TokenData, get_current_user
 from app.models.employee import (
@@ -63,8 +79,104 @@ async def create_employee_internal(
     session.commit()
     session.refresh(db_employee)
 
+    clear_cache_pattern("employee:*")
+    clear_cache_pattern("employees:*")
+
+    event_data = EmployeeCreatedEvent(
+        employee_id=db_employee.id,
+        first_name=db_employee.first_name,
+        last_name=db_employee.last_name,
+        email=db_employee.email,
+        contact_number=db_employee.contact_number,
+        position=db_employee.position,
+        department=db_employee.department,
+        date_of_hire=db_employee.date_of_hire.isoformat(),
+    )
+    event = EventEnvelope(
+        event_type=EventType.EMPLOYEE_CREATED,
+        data=event_data.model_dump(),
+        metadata=EventMetadata(),
+    )
+    await publish_event("employee-events", event)
+
     logger.info(f"Employee created successfully with ID: {db_employee.id}")
     return db_employee
+
+
+@router.get("/internal/list", response_model=list[EmployeePublic])
+async def list_employees_internal(
+    session: SessionDep,
+    offset: int = 0,
+    limit: Annotated[int, Query(le=1000)] = 1000,
+):
+    logger.info(f"Listing employees (internal): offset={offset}, limit={limit}")
+
+    cache_key = get_cache_key("employees:list", f"{offset}:{limit}")
+    cached = get_from_cache(cache_key)
+    if cached:
+        logger.info(f"Cache hit for employees list")
+        return cached
+
+    employees = session.exec(select(Employee).offset(offset).limit(limit)).all()
+    employees_list = [emp.model_dump() for emp in employees]
+    set_to_cache(cache_key, employees_list)
+
+    logger.info(f"Retrieved {len(employees)} employee(s)")
+    return employees_list
+
+
+@router.get("/internal/by-email/{email}", response_model=EmployeePublic)
+async def get_employee_by_email_internal(
+    email: str,
+    session: SessionDep,
+):
+    logger.info(f"Looking up employee by email (internal): {email}")
+
+    cache_key = get_cache_key("employee:email", email)
+    cached = get_from_cache(cache_key)
+    if cached:
+        logger.info(f"Cache hit for email: {email}")
+        return cached
+
+    statement = select(Employee).where(Employee.email == email)
+    employee = session.exec(statement).first()
+
+    if not employee:
+        logger.warning(f"Employee with email {email} not found")
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    employee_dict = employee.model_dump()
+    set_to_cache(cache_key, employee_dict)
+
+    logger.info(
+        f"Employee found: {employee.id} - {employee.first_name} {employee.last_name}"
+    )
+    return employee
+
+
+@router.get("/internal/{employee_id}", response_model=EmployeePublic)
+async def get_employee_internal(
+    employee_id: int,
+    session: SessionDep,
+):
+    logger.info(f"Fetching employee (internal): {employee_id}")
+
+    cache_key = get_cache_key("employee", employee_id)
+    cached = get_from_cache(cache_key)
+    if cached:
+        logger.info(f"Cache hit for employee ID: {employee_id}")
+        return cached
+
+    employee = session.get(Employee, employee_id)
+    if not employee:
+        logger.warning(f"Employee with ID {employee_id} not found")
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    employee_dict = employee.model_dump()
+    set_to_cache(cache_key, employee_dict)
+
+    logger.info(f"Employee found: {employee.first_name} {employee.last_name}")
+    return employee
 
 
 @router.post("/", response_model=EmployeePublic, status_code=201)
@@ -73,19 +185,35 @@ async def create_employee(
     session: SessionDep,
     current_user: CurrentUserDep,
 ):
-    """
-    Create a new employee record (Requires authentication).
-    """
     logger.info(
         f"Creating new employee: {employee.first_name} {employee.last_name} "
         f"by user: {current_user.sub}"
     )
 
-    # Convert input schema to ORM model
     db_employee = Employee.model_validate(employee)
     session.add(db_employee)
     session.commit()
     session.refresh(db_employee)
+
+    clear_cache_pattern("employee:*")
+    clear_cache_pattern("employees:*")
+
+    event_data = EmployeeCreatedEvent(
+        employee_id=db_employee.id,
+        first_name=db_employee.first_name,
+        last_name=db_employee.last_name,
+        email=db_employee.email,
+        contact_number=db_employee.contact_number,
+        position=db_employee.position,
+        department=db_employee.department,
+        date_of_hire=db_employee.date_of_hire.isoformat(),
+    )
+    event = EventEnvelope(
+        event_type=EventType.EMPLOYEE_CREATED,
+        data=event_data.model_dump(),
+        metadata=EventMetadata(user_id=current_user.sub),
+    )
+    await publish_event("employee-events", event)
 
     logger.info(f"Employee created successfully with ID: {db_employee.id}")
     return db_employee
@@ -98,21 +226,23 @@ async def read_employees(
     offset: int = 0,
     limit: Annotated[int, Query(le=100)] = 100,
 ):
-    """
-    Retrieve a list of employees with pagination.
-
-    - **offset**: Number of records to skip (default: 0)
-    - **limit**: Maximum number of records to return (default: 100, max: 100)
-    """
     logger.info(
         f"Fetching employees with offset={offset}, limit={limit} "
         f"by user: {current_user.sub}"
     )
 
+    cache_key = get_cache_key("employees:list", f"{offset}:{limit}")
+    cached = get_from_cache(cache_key)
+    if cached:
+        logger.info(f"Cache hit for employees list")
+        return cached
+
     employees = session.exec(select(Employee).offset(offset).limit(limit)).all()
+    employees_list = [emp.model_dump() for emp in employees]
+    set_to_cache(cache_key, employees_list)
 
     logger.info(f"Retrieved {len(employees)} employee(s)")
-    return list(employees)
+    return employees_list
 
 
 @router.get("/{employee_id}", response_model=EmployeePublic)
@@ -121,15 +251,21 @@ async def read_employee(
     session: SessionDep,
     current_user: CurrentUserDep,
 ):
-    """
-    Retrieve a specific employee by ID.
-    """
     logger.info(f"Fetching employee with ID: {employee_id} by user: {current_user.sub}")
+
+    cache_key = get_cache_key("employee", employee_id)
+    cached = get_from_cache(cache_key)
+    if cached:
+        logger.info(f"Cache hit for employee ID: {employee_id}")
+        return cached
 
     employee = session.get(Employee, employee_id)
     if not employee:
         logger.warning(f"Employee with ID {employee_id} not found")
         raise HTTPException(status_code=404, detail="Employee not found")
+
+    employee_dict = employee.model_dump()
+    set_to_cache(cache_key, employee_dict)
 
     logger.info(f"Employee found: {employee.first_name} {employee.last_name}")
     return employee
@@ -142,9 +278,6 @@ async def update_employee(
     session: SessionDep,
     current_user: CurrentUserDep,
 ):
-    """
-    Update an existing employee record with partial data.
-    """
     logger.info(
         f"Attempting to update employee with ID: {employee_id} "
         f"by user: {current_user.sub}"
@@ -155,7 +288,6 @@ async def update_employee(
         logger.warning(f"Employee with ID {employee_id} not found for update")
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    # Only update fields that were explicitly provided
     update_data = employee_update.model_dump(exclude_unset=True)
     logger.info(f"Updating employee {employee_id} with data: {update_data}")
 
@@ -163,6 +295,21 @@ async def update_employee(
     session.add(employee_db)
     session.commit()
     session.refresh(employee_db)
+
+    delete_from_cache(get_cache_key("employee", employee_id))
+    if employee_db.email:
+        delete_from_cache(get_cache_key("employee:email", employee_db.email))
+    clear_cache_pattern("employees:*")
+
+    event_data = EmployeeUpdatedEvent(
+        employee_id=employee_id, updated_fields=update_data
+    )
+    event = EventEnvelope(
+        event_type=EventType.EMPLOYEE_UPDATED,
+        data=event_data.model_dump(),
+        metadata=EventMetadata(user_id=current_user.sub),
+    )
+    await publish_event("employee-events", event)
 
     logger.info(f"Employee with ID {employee_id} updated successfully")
     return employee_db
@@ -174,9 +321,6 @@ async def delete_employee(
     session: SessionDep,
     current_user: CurrentUserDep,
 ):
-    """
-    Delete an employee record by ID.
-    """
     logger.info(
         f"Attempting to delete employee with ID: {employee_id} "
         f"by user: {current_user.sub}"
@@ -187,8 +331,23 @@ async def delete_employee(
         logger.warning(f"Employee with ID {employee_id} not found for deletion")
         raise HTTPException(status_code=404, detail="Employee not found")
 
+    employee_email = employee.email
+
     session.delete(employee)
     session.commit()
+
+    delete_from_cache(get_cache_key("employee", employee_id))
+    if employee_email:
+        delete_from_cache(get_cache_key("employee:email", employee_email))
+    clear_cache_pattern("employees:*")
+
+    event_data = EmployeeDeletedEvent(employee_id=employee_id, email=employee_email)
+    event = EventEnvelope(
+        event_type=EventType.EMPLOYEE_DELETED,
+        data=event_data.model_dump(),
+        metadata=EventMetadata(user_id=current_user.sub),
+    )
+    await publish_event("employee-events", event)
 
     logger.info(f"Employee with ID {employee_id} deleted successfully")
     return {"ok": True}
