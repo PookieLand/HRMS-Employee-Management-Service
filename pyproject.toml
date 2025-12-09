@@ -1,7 +1,7 @@
 [project]
 name = "employee-management-service"
 version = "0.1.0"
-description = ""
+description = "Employee Management Service for HRMS"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi[all]>=0.119.0",
@@ -13,6 +13,7 @@ dependencies = [
     "cryptography>=41.0.0",
     "httpx>=0.25.0",
     "redis>=5.0.0",
-    "aiokafka>=0.11.0",
+    "confluent-kafka>=2.3.0",
+    "python-dateutil>=2.8.2",
     "urllib3>=2.6.0",
 ]

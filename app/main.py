@@ -1,3 +1,13 @@
+"""
+Employee Management Service - Main Application Entry Point.
+
+This service handles employee data management including:
+- Employee CRUD operations with RBAC
+- Integration with User Management Service via Kafka
+- Onboarding event consumption
+- Dashboard metrics with Redis caching
+"""
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,8 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routers.employees import router as employees_router
 from app.core.cache import RedisClient
 from app.core.config import settings
+from app.core.consumers import register_onboarding_handlers
 from app.core.database import create_db_and_tables
-from app.core.kafka import KafkaProducer
+from app.core.kafka import KafkaConsumer, KafkaProducer
 from app.core.logging import get_logger
 from app.models.employee import Employee
 
@@ -21,7 +32,8 @@ async def lifespan(_: FastAPI):
     Handles startup and shutdown events.
     """
     # Startup
-    logger.info("Starting application...")
+    logger.info("Starting Employee Management Service...")
+
     logger.info("Creating database and tables...")
     create_db_and_tables(Employee)
     logger.info("Database and tables created successfully")
@@ -34,22 +46,43 @@ async def lifespan(_: FastAPI):
     await KafkaProducer.start()
     logger.info("Kafka producer initialized successfully")
 
-    logger.info("Application startup complete")
+    # Register Kafka event handlers for onboarding integration
+    logger.info("Registering Kafka consumer handlers...")
+    register_onboarding_handlers()
+    logger.info("Kafka handlers registered")
+
+    # Start Kafka consumer in background thread
+    logger.info("Starting Kafka consumer...")
+    await KafkaConsumer.start()
+    logger.info("Kafka consumer started")
+
+    logger.info("Employee Management Service startup complete")
 
     yield
 
     # Shutdown
-    logger.info("Application shutting down...")
+    logger.info("Employee Management Service shutting down...")
+
+    logger.info("Stopping Kafka consumer...")
+    await KafkaConsumer.stop()
+    logger.info("Kafka consumer stopped")
+
+    logger.info("Stopping Kafka producer...")
     await KafkaProducer.stop()
     logger.info("Kafka producer stopped")
+
+    logger.info("Closing Redis client...")
     RedisClient.close()
     logger.info("Redis client closed")
+
+    logger.info("Employee Management Service shutdown complete")
 
 
 # Initialize FastAPI application
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
+    description="Employee Management Service for HRMS",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -73,8 +106,39 @@ app.include_router(employees_router, prefix="/api/v1")
 # Health check endpoint
 @app.get("/health", tags=["health"])
 async def health_check():
+    """
+    Health check endpoint for container orchestration and monitoring.
+    """
     return {
         "status": "healthy",
-        # "service": settings.APP_NAME,
-        # "version": settings.APP_VERSION,
+        "service": "employee-management-service",
+        "version": settings.APP_VERSION,
+    }
+
+
+@app.get("/ready", tags=["health"])
+async def readiness_check():
+    """
+    Readiness check endpoint for Kubernetes.
+    Verifies that the service is ready to accept traffic.
+    """
+    # Check Redis connection
+    redis_ready = False
+    try:
+        client = RedisClient.get_client()
+        if client:
+            client.ping()
+            redis_ready = True
+    except Exception:
+        pass
+
+    # Check Kafka producer
+    kafka_ready = KafkaProducer._started
+
+    return {
+        "status": "ready" if (redis_ready and kafka_ready) else "not_ready",
+        "checks": {
+            "redis": "ok" if redis_ready else "error",
+            "kafka_producer": "ok" if kafka_ready else "error",
+        },
     }

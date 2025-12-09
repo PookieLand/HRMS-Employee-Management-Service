@@ -1,12 +1,17 @@
-FROM python:3.13-alpine3.22 AS builder
+FROM python:3.13-slim AS builder
 
-# Install build dependencies only in builder stage
-RUN apk add --no-cache \
-    pkgconfig \
+# Install build dependencies for confluent-kafka (librdkafka v2.12.1+) and mysqlclient
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
     gcc \
-    musl-dev \
-    mariadb-dev \
-    mariadb-connector-c-dev
+    default-libmysqlclient-dev \
+    curl \
+    gnupg \
+    && curl -fsSL https://packages.confluent.io/deb/7.9/archive.key | gpg --dearmor -o /usr/share/keyrings/confluent-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/confluent-archive-keyring.gpg] https://packages.confluent.io/deb/7.9 stable main" > /etc/apt/sources.list.d/confluent.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends librdkafka-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -39,17 +44,22 @@ RUN find /app/.venv/lib/python3.13/site-packages -type f \( -name "*.md" -o -nam
 RUN rm -rf /app/.venv/lib/python3.13/site-packages/pip /app/.venv/lib/python3.13/site-packages/setuptools /app/.venv/lib/python3.13/site-packages/wheel 2>/dev/null || true
 
 # Runtime stage
-FROM python:3.13-alpine3.22
+FROM python:3.13-slim
 
 # Install only runtime dependencies (not build tools)
-RUN apk add --no-cache \
-    mariadb-connector-c \
-    libstdc++ \
-    ca-certificates
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    default-mysql-client \
+    curl \
+    gnupg \
+    && curl -fsSL https://packages.confluent.io/deb/7.9/archive.key | gpg --dearmor -o /usr/share/keyrings/confluent-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/confluent-archive-keyring.gpg] https://packages.confluent.io/deb/7.9 stable main" > /etc/apt/sources.list.d/confluent.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends librdkafka1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
-RUN addgroup -g 10001 appgroup && \
-    adduser -u 10001 -G appgroup -s /sbin/nologin -D appuser
+RUN groupadd -g 10001 appgroup && \
+    useradd -u 10001 -g appgroup -s /sbin/nologin appuser
 
 # Copy virtual environment from builder
 COPY --from=builder --chown=appuser:appgroup /app/.venv /app/.venv
@@ -68,7 +78,7 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD /app/.venv/bin/python -c "import httpx; r = httpx.get('http://localhost:8000/health'); exit(0 if r.status_code == 200 else 1)" || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the application
 CMD ["/app/.venv/bin/fastapi", "run", "app/main.py", "--port", "8000", "--host", "0.0.0.0"]
