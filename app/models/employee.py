@@ -449,11 +449,20 @@ class EmployeeSummary(SQLModel):
     status: str
 
 
+class Pagination(BaseModel):
+    """Pagination metadata."""
+
+    offset: int
+    limit: int
+    total: int
+    has_more: bool
+
+
 class EmployeeListResponse(SQLModel):
     """Paginated employee list response."""
 
-    total: int
     employees: list[EmployeePublic]
+    pagination: Pagination
 
 
 class EmployeeDashboardMetrics(BaseModel):

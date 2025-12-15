@@ -77,6 +77,7 @@ from app.models.employee import (
     EmploymentType,
     InternalEmployeeCreate,
     OnboardingEmployeeCreate,
+    Pagination,
 )
 
 logger = get_logger(__name__)
@@ -641,9 +642,12 @@ async def list_employees(
 
     Results are filtered based on the user's role:
     - HR_Admin: See all employees
-    - HR_Manager: See managers and employees (not other HR_Managers)
-    - manager: See team members only
-    - employee: See only themselves
+    - HR_Manager: See all employees except HR_Admin
+    - manager: See all employees (directory view) + full access to team members
+    - employee: See all employees (directory view, read-only)
+
+    Note: For directory viewing, all roles can see employee listings.
+    Detailed information and actions are controlled by other endpoints.
     """
     logger.info(f"Fetching employees by user: {current_user.sub}")
 
@@ -653,24 +657,13 @@ async def list_employees(
     query = select(Employee)
 
     # Apply role-based filtering
-    if actor_role == "manager":
-        # Get current employee to find their team
-        actor_email = current_user.email
-        actor_employee = session.exec(
-            select(Employee).where(Employee.email == actor_email)
-        ).first()
-
-        if actor_employee:
-            query = query.where(Employee.manager_id == actor_employee.id)
-        else:
-            query = query.where(Employee.id == -1)  # No results
-
-    elif actor_role == "employee":
-        query = query.where(Employee.email == current_user.email)
-
-    elif actor_role == "HR_Manager":
-        # Cannot see HR_Admin or other HR_Managers
-        query = query.where(Employee.role.in_(["manager", "employee"]))
+    # For directory view, we allow most roles to see listings
+    # Sensitive operations are controlled by update/delete endpoints
+    if actor_role == "HR_Manager":
+        # HR_Manager cannot see HR_Admin
+        query = query.where(Employee.role != "HR_Admin")
+    # HR_Admin sees all
+    # manager and employee roles see all for directory purposes
 
     # Apply filters
     if department:
@@ -687,9 +680,17 @@ async def list_employees(
     # Apply pagination
     employees = session.exec(query.offset(offset).limit(limit)).all()
 
+    # Calculate has_more for pagination
+    has_more = (offset + len(employees)) < total
+
     return EmployeeListResponse(
-        total=total,
         employees=[EmployeePublic.model_validate(emp) for emp in employees],
+        pagination={
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "has_more": has_more,
+        },
     )
 
 
