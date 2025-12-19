@@ -3,6 +3,9 @@ name: Employee Management Service Build and Push
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+
   workflow_dispatch: {}
 
 jobs:
