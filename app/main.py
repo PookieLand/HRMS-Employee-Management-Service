@@ -142,3 +142,5 @@ async def readiness_check():
             "kafka_producer": "ok" if kafka_ready else "error",
         },
     }
+
+# Test Edit
